@@ -27,7 +27,8 @@ output/
 ├── mipnerf360/
 │   ├── counter/counter_20260709_1758/   ← counter 场景
 │   ├── counter.zip
-│   └── kitchen.zip                      ← kitchen 仅 zip（解压后同 counter 结构）
+│   ├── kitchen/kitchen_20260709_1758/   ← kitchen 场景（已解压）
+│   └── kitchen.zip                      ← kitchen 原始压缩包
 ├── lerf_mask/lerf_mask/
 │   ├── figurines_20260709_1758/         ← figurines 场景
 │   ├── ramen_20260709_1758/             ← ramen 场景
@@ -203,18 +204,101 @@ bear/bear/
 
 ---
 
-## 八、已知问题与后续工作
+## 八、Kitchen 场景结果详解
 
-| 问题 | 影响 | 建议 |
-|------|------|------|
-| kitchen inpaint OOM | 该场景缺少修复结果 | 降低分辨率(-r 4)或减少 finetune batch |
-| segment_anything 未安装 | LERF-Mask 评估未跑 | `pip install segment_anything` 后重跑 |
-| bear 无 test split | 无法报告 Novel View PSNR | 如需论文数据，重训加 `--eval` |
-| kitchen 仅有 zip | 需解压查看 | `unzip output/mipnerf360/kitchen.zip` |
+Kitchen 是 MipNeRF360 数据集中的室内厨房场景，使用半分辨率（`-r 2`）训练，开启 eval split。
+
+### 8.1 训练配置
+
+| 参数 | 值 |
+|------|-----|
+| 数据源 | `data/mipnerf360/kitchen` |
+| 分辨率 | 2x (半分辨率) |
+| eval 模式 | ✓ (train/test 自动分割) |
+| num_classes | 256 |
+| sh_degree | 3 |
+| 训练帧数 | 244 帧 (train) + 35 帧 (test) |
+
+### 8.2 输出目录结构
+
+```
+output/mipnerf360/kitchen/kitchen_20260709_1758/
+├── cfg_args                              ← 训练配置快照
+├── cameras.json                          ← 相机参数
+├── input.ply                             ← COLMAP 初始点云
+│
+├── point_cloud/
+│   ├── iteration_1000/                   ← 早期检查点
+│   ├── iteration_7000/                   ← 中期检查点
+│   └── iteration_30000/                  ← 最终模型 ★ (point_cloud.ply + classifier.pth)
+│
+├── point_cloud_object_removal/
+│   └── iteration_30000/point_cloud.ply   ← 物体移除后点云
+│
+├── point_cloud_object_inpaint/
+│   └── iteration_9999/point_cloud.ply    ← 修复点云（不完整）
+│
+├── train/
+│   ├── ours_30000/                       ← 基础渲染 (244帧 × 6子目录 + result.mp4)
+│   ├── ours_object_removal/iteration_30000/  ← 移除后渲染 (244帧 + result.mp4)
+│   └── ours_object_inpaint/iteration_9999/   ← 修复渲染 (仅1帧，OOM中断)
+│
+└── test/
+    ├── ours_30000/                       ← 测试视角渲染 (35帧 + result.mp4)
+    └── ours_object_removal/iteration_30000/  ← 移除后测试渲染 (35帧 + result.mp4)
+```
+
+### 8.3 量化指标
+
+| 指标 | Test | Train |
+|------|------|-------|
+| PSNR | **30.48** | 33.44 |
+
+Kitchen 的 Test PSNR 30.48 在 MipNeRF360 室内场景中属于较好水平，说明 3D Gaussian Splatting 的重建质量可靠。
+
+### 8.4 物体移除效果 (Object ID = 49)
+
+- **移除配置**: `removal_thresh = 0.3`, `select_obj_id = [49]`
+- **train 渲染**: 244 帧完整渲染，`concat/result.mp4` 可直接查看
+- **test 渲染**: 35 帧完整渲染，验证 Novel View 下的移除一致性
+- **审阅方法**: 对比 `ours_30000/renders/` 与 `ours_object_removal/iteration_30000/renders/` 的同序号图像
+
+### 8.5 物体修复 (Inpaint) — 不完整
+
+Inpaint 阶段因 CUDA OOM 中断（需分配 3.12 GiB，仅剩 2.77 GiB）:
+- `point_cloud_object_inpaint/iteration_9999/point_cloud.ply` 已生成（微调点云本身完成）
+- `train/ours_object_inpaint/iteration_9999/renders/` 仅渲染了 1 帧即终止
+- `test/` 下无 inpaint 渲染结果
+
+> 如需完整 inpaint 渲染，可在更大显存 GPU 上单独重跑渲染步骤：
+> ```bash
+> python render.py -m output/mipnerf360/kitchen_20260709_1758 \
+>     --num_classes 256 --images images \
+>     --target point_cloud_object_inpaint/iteration_9999
+> ```
+
+### 8.6 推荐查看顺序
+
+1. **快速总览**: 播放 `train/ours_30000/concat/result.mp4`
+2. **移除效果**: 播放 `train/ours_object_removal/iteration_30000/concat/result.mp4`，关注被移除区域是否有残影
+3. **Novel View 验证**: 播放 `test/ours_object_removal/iteration_30000/concat/result.mp4`，检查未见视角的移除质量
+4. **分割质量**: 对比 `objects_pred/` vs `gt_objects_color/`，检查 ID=49 物体的分割边界
+5. **特征可视化**: 查看 `objects_feature16/`，确认该区域的特征有清晰的物体边界
 
 ---
 
-## 九、文件大小参考
+## 九、已知问题与后续工作
+
+| 问题 | 影响 | 建议 |
+|------|------|------|
+| kitchen inpaint OOM | 修复仅完成1帧即中断 | 降低分辨率(-r 4)或减少 finetune batch |
+| segment_anything 未安装 | LERF-Mask 评估未跑 | `pip install segment_anything` 后重跑 |
+| bear 无 test split | 无法报告 Novel View PSNR | 如需论文数据，重训加 `--eval` |
+| kitchen inpaint 不完整 | train仅1帧、test无结果 | 重跑 inpaint 或忽略该步骤 |
+
+---
+
+## 十、文件大小参考
 
 - 单个 `point_cloud.ply` (30k iter): ~200-500 MB
 - 单帧渲染图 (985×729): ~500 KB
@@ -223,7 +307,7 @@ bear/bear/
 
 ---
 
-## 十、复现命令速查
+## 十一、复现命令速查
 
 ```bash
 # 训练 (以 bear 为例)
