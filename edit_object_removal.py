@@ -95,6 +95,9 @@ def removal_setup(opt, model_path, iteration, views, gaussians, pipeline, backgr
 
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, classifier):
+    if len(views) == 0:
+        print("No {} cameras found, skipping {} render.".format(name, name))
+        return
     render_path = os.path.join(model_path, name, "ours{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours{}".format(iteration), "gt")
     colormask_path = os.path.join(model_path, name, "ours{}".format(iteration), "objects_feature16")

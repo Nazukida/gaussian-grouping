@@ -1,0 +1,6 @@
+# 生成产物 / build outputs
+output/
+output.zip
+
+# Windows 误产生的 nul 文件
+nul
